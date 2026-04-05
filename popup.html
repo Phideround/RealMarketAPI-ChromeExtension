@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>RealMarketAPI &ndash; Live Prices</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #f1f5f9;
+      width: 360px;
+      min-height: 180px;
+    }
+    /* -- Header ---------------------------- */
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 11px 14px;
+      background: #080e1c; border-bottom: 1px solid #1e293b;
+    }
+    .logo-wrap { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+    .logo-svg  { width: 34px; height: 34px; flex-shrink: 0; }
+    .brand     { display: flex; flex-direction: column; }
+    .brand-name { font-size: 14px; font-weight: 800; color: #f1f5f9; letter-spacing: -0.2px; line-height: 1; }
+    .brand-api  { color: #f59e0b; }
+    .brand-sub  { font-size: 10px; color: #475569; margin-top: 2px; letter-spacing: 0.3px; }
+    .icon-btn {
+      display: flex; align-items: center; justify-content: center;
+      width: 30px; height: 30px;
+      background: #1e293b; border: 1px solid #334155;
+      border-radius: 8px; color: #64748b;
+      cursor: pointer; transition: all 0.15s; outline: none;
+    }
+    .icon-btn:hover  { background: #334155; color: #94a3b8; }
+    .icon-btn.active { background: #f59e0b22; border-color: #f59e0b; color: #f59e0b; }
+    /* -- Register banner ------------------- */
+    .reg-banner {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 14px;
+      background: #1c1200; border-bottom: 1px solid #92400e55;
+    }
+    .reg-banner-icon { font-size: 16px; flex-shrink: 0; }
+    .reg-banner-text { flex: 1; font-size: 11.5px; color: #fcd34d; line-height: 1.5; }
+    .reg-banner-text strong { color: #fef3c7; font-size: 12px; display: block; }
+    .reg-btn {
+      display: inline-flex; align-items: center; gap: 4px;
+      background: #f59e0b; color: #0f172a;
+      text-decoration: none; font-size: 11.5px; font-weight: 700;
+      padding: 6px 12px; border-radius: 6px; white-space: nowrap;
+      transition: background 0.15s; flex-shrink: 0;
+    }
+    .reg-btn:hover { background: #fbbf24; }
+    /* -- Settings panel -------------------- */
+    .settings-panel {
+      background: #060c18; border-bottom: 1px solid #1e293b;
+      padding: 14px;
+      max-height: 420px; overflow-y: auto;
+    }
+    .settings-panel::-webkit-scrollbar { width: 4px; }
+    .settings-panel::-webkit-scrollbar-track { background: transparent; }
+    .settings-panel::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+    .field           { margin-bottom: 10px; }
+    .field:last-child { margin-bottom: 0; }
+    .field label {
+      display: block; font-size: 10.5px; font-weight: 700;
+      color: #64748b; text-transform: uppercase;
+      letter-spacing: 0.6px; margin-bottom: 5px;
+    }
+    .field input, .field select {
+      width: 100%; background: #1e293b; border: 1px solid #334155;
+      color: #f1f5f9; padding: 8px 10px; border-radius: 7px;
+      font-size: 12.5px; outline: none; transition: border-color 0.15s;
+      font-family: inherit;
+    }
+    .field input:focus, .field select:focus { border-color: #f59e0b; }
+    .field input::placeholder { color: #334155; }
+    .field select option      { background: #1e293b; }
+    .field-hint { font-size: 10px; color: #475569; margin-top: 4px; line-height: 1.4; }
+    /* Section divider */
+    .section-divider {
+      height: 1px; background: #1e293b;
+      margin: 12px 0 10px;
+    }
+    .section-label {
+      font-size: 10px; font-weight: 800; color: #334155;
+      text-transform: uppercase; letter-spacing: 0.8px;
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 10px;
+    }
+    .section-label::after {
+      content: ''; flex: 1; height: 1px; background: #1e293b;
+    }
+    /* My Symbols */
+    .field label .label-link {
+      float: right; font-size: 10px; color: #f59e0b;
+      text-decoration: none; text-transform: none;
+      font-weight: 600; letter-spacing: 0;
+    }
+    .field label .label-link:hover { text-decoration: underline; }
+    .sym-tags {
+      display: flex; flex-wrap: wrap; gap: 5px;
+      min-height: 26px; margin-bottom: 7px;
+    }
+    .sym-tag {
+      display: inline-flex; align-items: center; gap: 2px;
+      background: #1e293b; border: 1px solid #334155;
+      color: #94a3b8; font-size: 11px; font-weight: 700;
+      padding: 3px 6px 3px 9px; border-radius: 20px;
+      letter-spacing: 0.4px; cursor: default;
+    }
+    .sym-tag-remove {
+      background: none; border: none; color: #475569;
+      cursor: pointer; padding: 0 2px; font-size: 13px;
+      line-height: 1; display: flex; align-items: center;
+      transition: color 0.15s; border-radius: 50%;
+    }
+    .sym-tag-remove:hover { color: #ef4444; }
+    .add-sym-row { display: flex; gap: 6px; }
+    .add-sym-row input { flex: 1; text-transform: uppercase; }
+    .add-sym-btn {
+      background: #334155; border: 1px solid #475569;
+      color: #94a3b8; padding: 0 12px; border-radius: 7px;
+      font-size: 12px; font-weight: 700; cursor: pointer;
+      font-family: inherit; transition: all 0.15s; white-space: nowrap;
+    }
+    .add-sym-btn:hover { background: #475569; color: #f1f5f9; }
+    /* Settings footer */
+    .settings-footer {
+      display: flex; align-items: center;
+      justify-content: space-between; margin-bottom: 12px;
+      padding-bottom: 12px; border-bottom: 1px solid #1e293b;
+    }
+    .save-btn {
+      display: flex; align-items: center; gap: 6px;
+      background: #f59e0b; color: #0f172a;
+      border: none; padding: 8px 18px; border-radius: 7px;
+      font-size: 13px; font-weight: 700; cursor: pointer;
+      font-family: inherit; transition: background 0.15s;
+    }
+    .save-btn:hover  { background: #fbbf24; }
+    .save-btn.saved  { background: #22c55e; color: #fff; }
+    .get-key-link {
+      color: #f59e0b; text-decoration: none; font-size: 12px;
+      display: flex; align-items: center; gap: 3px;
+    }
+    .get-key-link:hover { color: #fbbf24; text-decoration: underline; }
+    /* -- Price grid ------------------------ */
+    .price-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 8px; padding: 12px;
+    }
+    .price-card {
+      background: #1e293b; border: 1px solid #334155;
+      border-radius: 10px; padding: 11px 12px;
+      position: relative; overflow: hidden;
+      transition: border-color 0.2s, transform 0.1s;
+    }
+    .price-card::before {
+      content: ''; position: absolute;
+      top: 0; left: 0; right: 0; height: 2px;
+      border-radius: 10px 10px 0 0;
+      background: var(--card-color, #64748b); opacity: 0.7;
+    }
+    .price-card:hover { border-color: #475569; transform: translateY(-1px); }
+    .card-top {
+      display: flex; align-items: center;
+      justify-content: space-between; margin-bottom: 8px;
+    }
+    .symbol-badge { display: flex; align-items: center; gap: 6px; }
+    .sym-icon {
+      width: 22px; height: 22px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 9px; font-weight: 900; flex-shrink: 0;
+    }
+    .sym-code { font-size: 10px; font-weight: 700; color: #94a3b8; letter-spacing: 0.4px; }
+    .badge-pin {
+      font-size: 9px; opacity: 0.7; title: 'Shown on toolbar';
+    }
+    .price-val {
+      font-size: 16px; font-weight: 700; color: #f1f5f9;
+      font-variant-numeric: tabular-nums; letter-spacing: -0.3px;
+      line-height: 1; margin-bottom: 4px; min-height: 20px;
+    }
+    .price-label { font-size: 10px; color: #475569; margin-bottom: 6px; }
+    .ohlcv {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 2px 6px; margin-top: 5px;
+      border-top: 1px solid #1e293b; padding-top: 5px;
+    }
+    .ohlcv-row {
+      display: flex; justify-content: space-between; align-items: baseline;
+      font-size: 9px;
+    }
+    .ohlcv-lbl { color: #475569; font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase; }
+    .ohlcv-val { color: #94a3b8; font-variant-numeric: tabular-nums; }
+    .skeleton {
+      background: linear-gradient(90deg, #1e293b 25%, #2d3f55 50%, #1e293b 75%);
+      background-size: 200% 100%; animation: shimmer 1.5s infinite;
+      border-radius: 4px; height: 18px; width: 65%;
+    }
+    @keyframes shimmer {
+      0%   { background-position: -200% 0; }
+      100% { background-position:  200% 0; }
+    }
+    /* -- Footer ---------------------------- */
+    .footer {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 14px 10px;
+      border-top: 1px solid #1e293b; background: #060c18;
+    }
+    .status-area { display: flex; align-items: center; gap: 6px; }
+    .status-dot  { width: 6px; height: 6px; border-radius: 50%; background: #22c55e; flex-shrink: 0; }
+    .status-dot.loading { background: #f59e0b; animation: blink 0.8s infinite; }
+    .status-dot.error   { background: #ef4444; }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
+    .status-text { font-size: 10.5px; color: #475569; }
+    .refresh-btn {
+      display: flex; align-items: center; gap: 4px;
+      background: transparent; border: 1px solid #334155;
+      color: #64748b; padding: 4px 10px; border-radius: 6px;
+      font-size: 11.5px; cursor: pointer; font-family: inherit;
+      transition: all 0.15s;
+    }
+    .refresh-btn:hover  { border-color: #475569; color: #94a3b8; background: #1e293b; }
+    .refresh-btn:active { transform: scale(0.97); }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <!-- -- Header -------------------------------------------- -->
+  <header class="header">
+    <a class="logo-wrap" href="https://realmarketapi.com/" target="_blank" rel="noopener noreferrer" title="RealMarketAPI">
+      <svg class="logo-svg" viewBox="0 0 34 34" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect width="34" height="34" rx="8" fill="#1e293b"/>
+        <rect x="5" y="20" width="6" height="9" rx="1.5" fill="#f59e0b"/>
+        <line x1="8" y1="14" x2="8" y2="20" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/>
+        <line x1="8" y1="29" x2="8" y2="31" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/>
+        <rect x="14" y="11" width="6" height="13" rx="1.5" fill="#22c55e"/>
+        <line x1="17" y1="6"  x2="17" y2="11" stroke="#22c55e" stroke-width="1.5" stroke-linecap="round"/>
+        <line x1="17" y1="24" x2="17" y2="27" stroke="#22c55e" stroke-width="1.5" stroke-linecap="round"/>
+        <rect x="23" y="15" width="6" height="9" rx="1.5" fill="#ef4444"/>
+        <line x1="26" y1="10" x2="26" y2="15" stroke="#ef4444" stroke-width="1.5" stroke-linecap="round"/>
+        <line x1="26" y1="24" x2="26" y2="28" stroke="#ef4444" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      <div class="brand">
+        <span class="brand-name">RealMarket<span class="brand-api">API</span></span>
+        <span class="brand-sub">Live Market Prices</span>
+      </div>
+    </a>
+    <button class="icon-btn" id="settingsBtn" title="Settings" aria-label="Open settings">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </button>
+  </header>
+  <!-- -- No API key banner ---------------------------------- -->
+  <div class="reg-banner hidden" id="regBanner">
+    <span class="reg-banner-icon">🔑</span>
+    <div class="reg-banner-text">
+      <strong>API key required</strong>
+      Enter your key in Settings to see live prices.
+    </div>
+    <a class="reg-btn" href="https://realmarketapi.com/register" target="_blank" rel="noopener noreferrer">
+      Register free →
+    </a>
+  </div>
+  <!-- -- Settings panel ------------------------------------ -->
+  <div class="settings-panel hidden" id="settingsPanel">
+    <!-- Footer (moved to top) -->
+    <div class="settings-footer">
+      <button class="save-btn" id="saveBtn">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+        Save Settings
+      </button>
+      <a class="get-key-link" href="https://realmarketapi.com/register"
+         target="_blank" rel="noopener noreferrer">
+        Get free API key →
+      </a>
+    </div>
+    <!-- API Key -->
+    <div class="field">
+      <label>API Key</label>
+      <input type="text" id="apiKeyInput"
+             placeholder="Paste your RealMarketAPI key here…"
+             autocomplete="off" spellcheck="false">
+    </div>
+    <!-- Refresh Interval -->
+    <div class="field">
+      <label>Auto-refresh Interval</label>
+      <select id="intervalSelect">
+        <option value="0">Manual only</option>
+        <option value="5">Every 5 seconds</option>
+        <option value="10">Every 10 seconds</option>
+        <option value="30" selected>Every 30 seconds</option>
+        <option value="60">Every 1 minute</option>
+        <option value="300">Every 5 minutes</option>
+        <option value="3600">Every 1 hour</option>
+      </select>
+    </div>
+    <!-- My Symbols -->
+    <div class="section-divider"></div>
+    <div class="section-label">My Symbols</div>
+    <div class="field">
+      <label>
+        Active Symbols
+        <a class="label-link" href="https://realmarketapi.com/docs/getting-started#symbols"
+           target="_blank" rel="noopener noreferrer">Browse 31 symbols →</a>
+      </label>
+      <div class="sym-tags" id="symTags"></div>
+      <div class="add-sym-row">
+        <input type="text" id="newSymInput"
+               placeholder="e.g. ETHUSD, EURUSD, AAPL…"
+               maxlength="12" autocomplete="off" spellcheck="false">
+        <button class="add-sym-btn" id="addSymBtn">+ Add</button>
+      </div>
+      <p class="field-hint">
+        Supports metals, forex, crypto, commodities, indices &amp; stocks.
+        <a href="https://realmarketapi.com/docs/getting-started#symbols"
+           target="_blank" rel="noopener noreferrer" style="color:#f59e0b;text-decoration:none;">
+          See all available symbols →
+        </a>
+      </p>
+    </div>
+    <!-- Tab Bar Badge -->
+    <div class="section-divider"></div>
+    <div class="section-label">Tab Bar Badge</div>
+    <div class="field">
+      <label>Symbol to show on toolbar icon</label>
+      <select id="badgeSymbolSelect">
+        <!-- populated dynamically -->
+      </select>
+      <p class="field-hint">
+        📌 The live price of the selected symbol will appear as a badge on the
+        RealMarketAPI icon in your Chrome toolbar — even when the popup is closed.
+      </p>
+    </div>
+  </div>
+  <!-- -- Price grid ----------------------------------------- -->
+  <main class="price-grid" id="priceGrid"></main>
+  <!-- -- Footer -------------------------------------------- -->
+  <footer class="footer">
+    <div class="status-area">
+      <span class="status-dot loading" id="statusDot"></span>
+      <span class="status-text" id="statusText">Connecting…</span>
+    </div>
+    <button class="refresh-btn" id="refreshBtn">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="23 4 23 10 17 10"/>
+        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+      </svg>
+      Refresh
+    </button>
+  </footer>
+  <script src="popup.js"></script>
+</body>
+</html>
