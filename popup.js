@@ -216,8 +216,8 @@ function formatPrice(value, code) {
 function formatBadge(price) {
   const n = parseFloat(price);
   if (isNaN(n)) return '';
-  if (n >= 10_000) return String(Math.round(n));   // "67115"  (5 chars, fits badge)
-  if (n < 10)      return n.toFixed(4);             // "1.0831"
+  if (n >= 1_000) return String(Math.round(n));    // "4675"   (4 chars, fits badge)
+  if (n < 10)     return n.toFixed(4);              // "1.0831"
   return n.toFixed(2);                              // "70.45"
 }
 

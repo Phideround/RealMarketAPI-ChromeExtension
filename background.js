@@ -7,8 +7,8 @@ const ALARM_KEY = 'rma_refresh';
 function formatBadge(price) {
   const n = parseFloat(price);
   if (isNaN(n)) return '';
-  if (n >= 10_000) return String(Math.round(n));
-  if (n < 10)      return n.toFixed(4);
+  if (n >= 1_000) return String(Math.round(n));
+  if (n < 10)     return n.toFixed(4);
   return n.toFixed(2);
 }
 
