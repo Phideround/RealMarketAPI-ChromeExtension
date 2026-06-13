@@ -76,6 +76,7 @@
     .field input::placeholder { color: #334155; }
     .field select option      { background: #1e293b; }
     .field-hint { font-size: 10px; color: #475569; margin-top: 4px; line-height: 1.4; }
+    .field small { display: block; margin-top: 4px; color: #475569; font-size: 10px; }
     /* Section divider */
     .section-divider {
       height: 1px; background: #1e293b;
@@ -124,6 +125,96 @@
       font-family: inherit; transition: all 0.15s; white-space: nowrap;
     }
     .add-sym-btn:hover { background: #475569; color: #f1f5f9; }
+    .tool-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .tool-card {
+      background: #111827;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 8px;
+    }
+    .tool-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: #cbd5e1;
+      margin-bottom: 6px;
+      letter-spacing: 0.3px;
+    }
+    .tool-row {
+      display: flex;
+      gap: 6px;
+    }
+    .tool-row input {
+      flex: 1;
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #f1f5f9;
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 12px;
+      font-family: inherit;
+    }
+    .tool-btn {
+      border: 1px solid #475569;
+      background: #334155;
+      color: #e2e8f0;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: inherit;
+      white-space: nowrap;
+    }
+    .tool-btn:hover { background: #475569; }
+    .diag-card {
+      background: #0b1220;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 10px;
+      margin-top: 8px;
+    }
+    .diag-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px 10px;
+      margin-top: 6px;
+    }
+    .diag-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      font-size: 10.5px;
+      color: #94a3b8;
+      gap: 8px;
+    }
+    .diag-row strong {
+      color: #e2e8f0;
+      font-size: 11px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .diag-actions {
+      margin-top: 8px;
+      display: flex;
+      justify-content: flex-end;
+    }
+    .diag-reset-btn {
+      border: 1px solid #475569;
+      background: #1e293b;
+      color: #cbd5e1;
+      border-radius: 6px;
+      padding: 5px 9px;
+      font-size: 10.5px;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .diag-reset-btn:hover { background: #334155; }
     /* Settings footer */
     .settings-footer {
       display: flex; align-items: center;
@@ -337,6 +428,55 @@
         📌 The live price of the selected symbol will appear as a badge on the
         RealMarketAPI icon in your Chrome toolbar — even when the popup is closed.
       </p>
+    </div>
+
+    <div class="section-divider"></div>
+    <div class="section-label">Pro Tools</div>
+    <div class="tool-grid">
+      <div class="tool-card">
+        <div class="tool-title">Create Alert</div>
+        <div class="tool-row">
+          <input id="alertSymbolInput" type="text" placeholder="Symbol (BTCUSD)">
+          <input id="alertThresholdInput" type="number" placeholder="Price">
+          <button class="tool-btn" id="createAlertBtn">Create</button>
+        </div>
+        <small>Creates a PriceCrossAbove alert on H1.</small>
+      </div>
+
+      <div class="tool-card">
+        <div class="tool-title">Run Screener</div>
+        <div class="tool-row">
+          <input id="screenerTrendInput" type="text" placeholder="Trend (Bullish)">
+          <button class="tool-btn" id="runScreenerBtn">Run</button>
+        </div>
+      </div>
+
+      <div class="tool-card">
+        <div class="tool-title">Add Watchlist Item</div>
+        <div class="tool-row">
+          <input id="watchlistIdInput" type="text" placeholder="Watchlist ID">
+          <input id="watchlistSymbolInput" type="text" placeholder="Symbol">
+          <button class="tool-btn" id="addWatchlistBtn">Add</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-divider"></div>
+    <div class="section-label">Connection Diagnostics</div>
+    <div class="diag-card">
+      <div class="diag-row"><span>Mode</span><strong id="diagMode">Idle</strong></div>
+      <div class="diag-grid">
+        <div class="diag-row"><span>WS Opens</span><strong id="diagWsOpens">0</strong></div>
+        <div class="diag-row"><span>WS Closes</span><strong id="diagWsCloses">0</strong></div>
+        <div class="diag-row"><span>WS Messages</span><strong id="diagWsMessages">0</strong></div>
+        <div class="diag-row"><span>Reconnects</span><strong id="diagReconnects">0</strong></div>
+        <div class="diag-row"><span>Fallbacks</span><strong id="diagFallbacks">0</strong></div>
+        <div class="diag-row"><span>Poll Calls</span><strong id="diagPollCalls">0</strong></div>
+        <div class="diag-row"><span>Poll Errors</span><strong id="diagPollErrors">0</strong></div>
+      </div>
+      <div class="diag-actions">
+        <button class="diag-reset-btn" id="diagResetBtn">Reset Counters</button>
+      </div>
     </div>
   </div>
   <!-- -- Price grid ----------------------------------------- -->

@@ -63,6 +63,27 @@ let settings = {
 let refreshTimer = null;
 let cntTimer     = null;
 let cntValue     = 0;
+let currentFetchController = null;
+let wsHealthTimer = null;
+const wsConnections = new Map();
+const wsReconnectAttempts = new Map();
+const latestPrices = {};
+const WS_BASE_DELAY_MS = 1500;
+const WS_MAX_DELAY_MS = 30000;
+let wsLastMessageAt = 0;
+let fallbackPolling = false;
+let metricsPersistTimer = null;
+
+const transportMetrics = {
+  mode: 'idle',
+  wsOpens: 0,
+  wsCloses: 0,
+  wsMessages: 0,
+  wsReconnects: 0,
+  fallbackActivations: 0,
+  pollingCalls: 0,
+  pollingErrors: 0,
+};
 
 // --- DOM refs -----------------------------------------------------------------
 const regBanner     = document.getElementById('regBanner');
@@ -79,6 +100,61 @@ const priceGrid     = document.getElementById('priceGrid');
 const statusDot     = document.getElementById('statusDot');
 const statusText    = document.getElementById('statusText');
 const refreshBtn    = document.getElementById('refreshBtn');
+const alertSymbolInput = document.getElementById('alertSymbolInput');
+const alertThresholdInput = document.getElementById('alertThresholdInput');
+const createAlertBtn = document.getElementById('createAlertBtn');
+const screenerTrendInput = document.getElementById('screenerTrendInput');
+const runScreenerBtn = document.getElementById('runScreenerBtn');
+const watchlistIdInput = document.getElementById('watchlistIdInput');
+const watchlistSymbolInput = document.getElementById('watchlistSymbolInput');
+const addWatchlistBtn = document.getElementById('addWatchlistBtn');
+const diagModeEl = document.getElementById('diagMode');
+const diagWsOpensEl = document.getElementById('diagWsOpens');
+const diagWsClosesEl = document.getElementById('diagWsCloses');
+const diagWsMessagesEl = document.getElementById('diagWsMessages');
+const diagReconnectsEl = document.getElementById('diagReconnects');
+const diagFallbacksEl = document.getElementById('diagFallbacks');
+const diagPollCallsEl = document.getElementById('diagPollCalls');
+const diagPollErrorsEl = document.getElementById('diagPollErrors');
+const diagResetBtn = document.getElementById('diagResetBtn');
+
+function setTransportMode(mode) {
+  transportMetrics.mode = mode;
+  schedulePersistMetrics();
+  updateDiagnosticsPanel();
+}
+
+function bumpMetric(name, value = 1) {
+  transportMetrics[name] = (transportMetrics[name] || 0) + value;
+  schedulePersistMetrics();
+  updateDiagnosticsPanel();
+}
+
+function schedulePersistMetrics() {
+  if (metricsPersistTimer) clearTimeout(metricsPersistTimer);
+  metricsPersistTimer = setTimeout(() => {
+    chrome.storage.local.set({ rma_transportMetrics: transportMetrics });
+  }, 300);
+}
+
+function updateDiagnosticsPanel() {
+  if (!diagModeEl) return;
+
+  const modeLabel = transportMetrics.mode === 'ws'
+    ? 'WebSocket'
+    : transportMetrics.mode === 'polling'
+    ? 'Polling Fallback'
+    : 'Idle';
+
+  diagModeEl.textContent = modeLabel;
+  if (diagWsOpensEl) diagWsOpensEl.textContent = String(transportMetrics.wsOpens);
+  if (diagWsClosesEl) diagWsClosesEl.textContent = String(transportMetrics.wsCloses);
+  if (diagWsMessagesEl) diagWsMessagesEl.textContent = String(transportMetrics.wsMessages);
+  if (diagReconnectsEl) diagReconnectsEl.textContent = String(transportMetrics.wsReconnects);
+  if (diagFallbacksEl) diagFallbacksEl.textContent = String(transportMetrics.fallbackActivations);
+  if (diagPollCallsEl) diagPollCallsEl.textContent = String(transportMetrics.pollingCalls);
+  if (diagPollErrorsEl) diagPollErrorsEl.textContent = String(transportMetrics.pollingErrors);
+}
 
 // --- Build price grid ---------------------------------------------------------
 function buildGrid() {
@@ -150,18 +226,7 @@ function addSymbol(raw) {
   buildGrid();
   renderSymbolTags();
   populateBadgeSelect();
-  // Optimistically fetch the new symbol's price
-  if (settings.apiKey) {
-    fetchSymbol(settings.apiKey, code)
-      .then(data => {
-        const el = document.getElementById(`price-${code}`);
-        if (el) el.textContent = formatPrice(data.closePrice, code);
-      })
-      .catch(() => {
-        const el = document.getElementById(`price-${code}`);
-        if (el) el.textContent = '—';
-      });
-  }
+  if (settings.apiKey) restartTransport();
 }
 
 function removeSymbol(code) {
@@ -174,6 +239,7 @@ function removeSymbol(code) {
   renderSymbolTags();
   populateBadgeSelect();
   if (!settings.badgeSymbol) chrome.action.setBadgeText({ text: '' });
+  if (settings.apiKey) restartTransport();
 }
 
 // --- Symbol tag click delegation ---------------------------------------------
@@ -221,6 +287,35 @@ function formatBadge(price) {
   return n.toFixed(2);                              // "70.45"
 }
 
+function getWsPriceUrl(apiKey, code) {
+  return `wss://api.realmarketapi.com/price?apiKey=${encodeURIComponent(apiKey)}&symbolCode=${encodeURIComponent(code)}&timeFrame=H1`;
+}
+
+function updateSymbolCard(code, data) {
+  const el = document.getElementById(`price-${code}`);
+  if (!el) return;
+
+  el.textContent = formatPrice(data.closePrice, code);
+  latestPrices[code] = data.closePrice;
+
+  const set = (id, value) => {
+    const field = document.getElementById(id);
+    if (field) field.textContent = value;
+  };
+
+  set(`bid-${code}`, formatPrice(data.bid, code));
+  set(`ask-${code}`, formatPrice(data.ask, code));
+  set(`open-${code}`, formatPrice(data.openPrice, code));
+  set(`high-${code}`, formatPrice(data.highPrice, code));
+  set(`low-${code}`, formatPrice(data.lowPrice, code));
+  set(`vol-${code}`, data.volume != null ? Number(data.volume).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—');
+}
+
+function markSymbolUnavailable(code) {
+  const el = document.getElementById(`price-${code}`);
+  if (el) el.textContent = '—';
+}
+
 // --- Update chrome toolbar badge ---------------------------------------------
 function updateBadge(priceMap) {
   if (!settings.badgeSymbol) {
@@ -236,9 +331,9 @@ function updateBadge(priceMap) {
 }
 
 // --- Fetch a single symbol ----------------------------------------------------
-async function fetchSymbol(apiKey, code) {
+async function fetchSymbol(apiKey, code, signal) {
   const url = `https://api.realmarketapi.com/api/v1/price?apiKey=${encodeURIComponent(apiKey)}&symbolCode=${encodeURIComponent(code)}&timeFrame=H1`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.message || `HTTP ${res.status}`);
@@ -255,13 +350,21 @@ async function fetchAllPrices() {
   }
 
   setStatus('loading', 'Fetching…');
+  bumpMetric('pollingCalls');
+
+  // Cancel stale refresh calls so slower previous responses cannot overwrite newer data.
+  if (currentFetchController) {
+    currentFetchController.abort();
+  }
+  currentFetchController = new AbortController();
+  const { signal } = currentFetchController;
 
   // Snapshot the symbol list before the await so index alignment is stable
   // even if the user adds/removes symbols while the requests are in flight.
   const symbolSnapshot = [...settings.symbols];
 
   const results = await Promise.allSettled(
-    symbolSnapshot.map(code => fetchSymbol(settings.apiKey, code))
+    symbolSnapshot.map(code => fetchSymbol(settings.apiKey, code, signal))
   );
 
   const priceMap = {};
@@ -269,26 +372,25 @@ async function fetchAllPrices() {
 
   results.forEach((result, i) => {
     const code = symbolSnapshot[i];
-    const el   = document.getElementById(`price-${code}`);
+    const el = document.getElementById(`price-${code}`);
     if (!el) return; // card was removed while fetch was in flight
     if (result.status === 'fulfilled') {
-      const d = result.value;
-      el.textContent = formatPrice(d.closePrice, code);
-      priceMap[code] = d.closePrice;
-      // populate OHLCV fields
-      const set = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
-      set(`bid-${code}`,  formatPrice(d.bid,  code));
-      set(`ask-${code}`,  formatPrice(d.ask,  code));
-      set(`open-${code}`, formatPrice(d.openPrice, code));
-      set(`high-${code}`, formatPrice(d.highPrice, code));
-      set(`low-${code}`,  formatPrice(d.lowPrice,  code));
-      set(`vol-${code}`,  d.volume != null ? Number(d.volume).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—');
+      updateSymbolCard(code, result.value);
+      priceMap[code] = result.value.closePrice;
     } else {
-      el.textContent = '—';
-      errorCount++;
-      console.warn(`[RealMarketAPI] ${code}:`, result.reason?.message);
+      markSymbolUnavailable(code);
+      // Ignore expected cancellation errors from a newer refresh.
+      if (result.reason?.name !== 'AbortError') {
+        errorCount++;
+        console.warn(`[RealMarketAPI] ${code}:`, result.reason?.message);
+      }
     }
   });
+
+  // Another refresh started while this one was in flight; ignore stale completion.
+  if (signal.aborted) return;
+
+  currentFetchController = null;
 
   updateBadge(priceMap);
 
@@ -296,9 +398,10 @@ async function fetchAllPrices() {
     hour: '2-digit', minute: '2-digit', second: '2-digit',
   });
   if (errorCount === symbolSnapshot.length) {
+    bumpMetric('pollingErrors');
     setStatus('error', `Error — ${now}`);
   } else {
-    setStatus('live', `Updated ${now}`);
+    setStatus('live', fallbackPolling ? `Polling fallback — ${now}` : `Updated ${now}`);
     resetCountdown();
   }
 }
@@ -309,6 +412,94 @@ function setStatus(state, text) {
   if (state === 'loading') statusDot.classList.add('loading');
   else if (state === 'error') statusDot.classList.add('error');
   statusText.textContent = text || '';
+}
+
+function toUpperOrEmpty(value) {
+  return (value || '').trim().toUpperCase();
+}
+
+async function apiPost(path, payload) {
+  if (!settings.apiKey) throw new Error('API key required');
+  const url = `https://api.realmarketapi.com${path}?apiKey=${encodeURIComponent(settings.apiKey)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.message || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+async function createAlertFromPopup() {
+  const symbolCode = toUpperOrEmpty(alertSymbolInput?.value);
+  const threshold = Number(alertThresholdInput?.value || 0);
+  if (!symbolCode || threshold <= 0) {
+    setStatus('error', 'Alert: symbol and threshold required');
+    return;
+  }
+
+  try {
+    setStatus('loading', 'Creating alert…');
+    await apiPost('/api/v1/alerts', {
+      symbolCode,
+      timeFrame: 'H1',
+      ruleType: 'PriceCrossAbove',
+      threshold,
+      cooldownSeconds: 300,
+      channels: ['Extension'],
+    });
+    setStatus('live', `Alert created for ${symbolCode}`);
+    if (alertThresholdInput) alertThresholdInput.value = '';
+  } catch (err) {
+    setStatus('error', `Alert failed: ${err.message}`);
+  }
+}
+
+async function runScreenerFromPopup() {
+  const trend = (screenerTrendInput?.value || '').trim() || 'Bullish';
+  try {
+    setStatus('loading', 'Running screener…');
+    const data = await apiPost('/api/v1/screener/query', {
+      timeFrame: 'H1',
+      trend,
+      size: 5,
+      sortField: 'SignalScore',
+      sortDirection: 'Desc',
+    });
+
+    const top = Array.isArray(data?.data) ? data.data[0] : null;
+    if (top?.symbolCode) {
+      setStatus('live', `Top: ${top.symbolCode} (${top.signalScore ?? '-'})`);
+    } else {
+      setStatus('live', 'Screener done: no matches');
+    }
+  } catch (err) {
+    setStatus('error', `Screener failed: ${err.message}`);
+  }
+}
+
+async function addWatchlistItemFromPopup() {
+  const watchlistId = (watchlistIdInput?.value || '').trim();
+  const symbolCode = toUpperOrEmpty(watchlistSymbolInput?.value);
+  if (!watchlistId || !symbolCode) {
+    setStatus('error', 'Watchlist: id and symbol required');
+    return;
+  }
+
+  try {
+    setStatus('loading', 'Adding watchlist item…');
+    await apiPost(`/api/v1/watchlists/${encodeURIComponent(watchlistId)}/items`, {
+      symbolCode,
+      order: 0,
+    });
+    setStatus('live', `Added ${symbolCode} to watchlist`);
+    if (watchlistSymbolInput) watchlistSymbolInput.value = '';
+  } catch (err) {
+    setStatus('error', `Watchlist failed: ${err.message}`);
+  }
 }
 
 // --- Countdown to next refresh -----------------------------------------------
@@ -325,19 +516,160 @@ function resetCountdown() {
   }, 1000);
 }
 
-// --- Auto-refresh -------------------------------------------------------------
-function startAutoRefresh() {
+// --- Polling fallback ---------------------------------------------------------
+function stopPollingFallback() {
   if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = null;
+  fallbackPolling = false;
+  if (transportMetrics.mode === 'polling') setTransportMode('idle');
+}
+
+function startPollingFallback(reason) {
+  if (!settings.apiKey) return;
+
+  const wasFallback = fallbackPolling;
+  fallbackPolling = true;
+  setTransportMode('polling');
+  if (!wasFallback) bumpMetric('fallbackActivations');
+  if (refreshTimer) clearInterval(refreshTimer);
+
   if (settings.interval > 0) {
     refreshTimer = setInterval(fetchAllPrices, settings.interval * 1000);
   }
+
+  const message = reason ? `WS reconnecting, polling fallback (${reason})` : 'WS reconnecting, polling fallback';
+  setStatus('loading', message);
+  fetchAllPrices();
+}
+
+// --- WebSocket-first transport -----------------------------------------------
+function stopWsHealthWatchdog() {
+  if (wsHealthTimer) clearInterval(wsHealthTimer);
+  wsHealthTimer = null;
+}
+
+function startWsHealthWatchdog() {
+  stopWsHealthWatchdog();
+  wsHealthTimer = setInterval(() => {
+    if (!settings.apiKey) return;
+
+    const now = Date.now();
+    const staleThresholdMs = Math.max(12000, settings.interval * 2500);
+    const stale = wsLastMessageAt > 0 && now - wsLastMessageAt > staleThresholdMs;
+    const noSocket = wsConnections.size === 0;
+
+    if (noSocket || stale) {
+      startPollingFallback(noSocket ? 'no-socket' : 'stale-stream');
+    }
+  }, 5000);
+}
+
+function stopWebSocketMode() {
+  const sockets = Array.from(wsConnections.values());
+  wsConnections.clear();
+
+  sockets.forEach(socket => {
+    try { socket.close(); } catch (_) {}
+  });
+  wsReconnectAttempts.clear();
+  stopWsHealthWatchdog();
+}
+
+function scheduleWsReconnect(code) {
+  bumpMetric('wsReconnects');
+  const currentAttempt = wsReconnectAttempts.get(code) || 0;
+  const nextAttempt = currentAttempt + 1;
+  wsReconnectAttempts.set(code, nextAttempt);
+
+  const expDelay = Math.min(WS_MAX_DELAY_MS, WS_BASE_DELAY_MS * (2 ** (nextAttempt - 1)));
+  const jitter = Math.floor(Math.random() * Math.max(1, Math.floor(expDelay * 0.3)));
+  const delay = Math.min(WS_MAX_DELAY_MS, expDelay + jitter);
+
+  setTimeout(() => {
+    if (!settings.apiKey) return;
+    if (!settings.symbols.includes(code)) return;
+    if (wsConnections.has(code)) return;
+    connectWebSocketForSymbol(code);
+  }, delay);
+}
+
+function connectWebSocketForSymbol(code) {
+  if (!settings.apiKey || !settings.symbols.includes(code)) return;
+
+  try {
+    const ws = new WebSocket(getWsPriceUrl(settings.apiKey, code));
+    wsConnections.set(code, ws);
+
+    ws.addEventListener('open', () => {
+      bumpMetric('wsOpens');
+      setTransportMode('ws');
+      wsReconnectAttempts.set(code, 0);
+      setStatus('live', 'Live stream (WebSocket)');
+      stopPollingFallback();
+    });
+
+    ws.addEventListener('message', event => {
+      try {
+        const payload = JSON.parse(event.data);
+        updateSymbolCard(code, payload);
+        wsLastMessageAt = Date.now();
+        bumpMetric('wsMessages');
+        updateBadge(latestPrices);
+
+        const now = new Date().toLocaleTimeString('en-US', {
+          hour: '2-digit', minute: '2-digit', second: '2-digit',
+        });
+        setStatus('live', `Streaming (WS) — ${now}`);
+      } catch (err) {
+        console.warn('[RealMarketAPI] WS parse error:', err?.message || err);
+      }
+    });
+
+    ws.addEventListener('error', () => {
+      setStatus('error', `WS error on ${code}, reconnecting`);
+    });
+
+    ws.addEventListener('close', () => {
+      if (wsConnections.get(code) !== ws) return;
+      bumpMetric('wsCloses');
+      wsConnections.delete(code);
+      startPollingFallback(`ws-close:${code}`);
+      scheduleWsReconnect(code);
+    });
+  } catch (err) {
+    console.warn(`[RealMarketAPI] WS connect failed for ${code}:`, err?.message || err);
+    startPollingFallback(`ws-connect:${code}`);
+    scheduleWsReconnect(code);
+  }
+}
+
+function startWebSocketMode() {
+  stopWebSocketMode();
+  stopPollingFallback();
+
+  wsLastMessageAt = 0;
+  setTransportMode('ws');
+  settings.symbols.forEach(code => connectWebSocketForSymbol(code));
+  startWsHealthWatchdog();
+}
+
+function restartTransport() {
+  if (!settings.apiKey) {
+    stopWebSocketMode();
+    stopPollingFallback();
+    return;
+  }
+
+  // Fast snapshot first, then stream updates.
+  fetchAllPrices();
+  startWebSocketMode();
 }
 
 // --- Storage ------------------------------------------------------------------
 function loadSettings() {
   return new Promise(resolve => {
     chrome.storage.local.get(
-      ['rma_apiKey', 'rma_interval', 'rma_symbols', 'rma_badgeSymbol'],
+      ['rma_apiKey', 'rma_interval', 'rma_symbols', 'rma_badgeSymbol', 'rma_transportMetrics'],
       data => {
         settings.apiKey      = data.rma_apiKey || '';
         settings.interval    = typeof data.rma_interval === 'number' ? data.rma_interval : 30;
@@ -347,6 +679,13 @@ function loadSettings() {
         settings.badgeSymbol = typeof data.rma_badgeSymbol === 'string'
                                  ? data.rma_badgeSymbol
                                  : settings.symbols[0];
+
+        const savedMetrics = data.rma_transportMetrics;
+        if (savedMetrics && typeof savedMetrics === 'object') {
+          Object.assign(transportMetrics, savedMetrics);
+        }
+
+        updateDiagnosticsPanel();
         resolve();
       }
     );
@@ -400,19 +739,40 @@ saveBtn.addEventListener('click', () => {
 
     if (key) regBanner.classList.add('hidden');
     buildGrid(); // re-render cards to update badge-pin indicators
-    startAutoRefresh();
-    fetchAllPrices();
+    restartTransport();
   });
 });
 
 apiKeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') saveBtn.click(); });
 
+if (diagResetBtn) {
+  diagResetBtn.addEventListener('click', () => {
+    Object.assign(transportMetrics, {
+      mode: settings.apiKey ? 'idle' : 'idle',
+      wsOpens: 0,
+      wsCloses: 0,
+      wsMessages: 0,
+      wsReconnects: 0,
+      fallbackActivations: 0,
+      pollingCalls: 0,
+      pollingErrors: 0,
+    });
+    updateDiagnosticsPanel();
+    chrome.storage.local.set({ rma_transportMetrics: transportMetrics });
+    setStatus('live', 'Diagnostics counters reset');
+  });
+}
+
 // --- Refresh button -----------------------------------------------------------
 refreshBtn.addEventListener('click', () => {
   if (cntTimer) clearInterval(cntTimer);
-  startAutoRefresh();
+  if (fallbackPolling) startPollingFallback('manual-refresh');
   fetchAllPrices();
 });
+
+if (createAlertBtn) createAlertBtn.addEventListener('click', createAlertFromPopup);
+if (runScreenerBtn) runScreenerBtn.addEventListener('click', runScreenerFromPopup);
+if (addWatchlistBtn) addWatchlistBtn.addEventListener('click', addWatchlistItemFromPopup);
 
 // --- Init ---------------------------------------------------------------------
 async function init() {
@@ -426,10 +786,10 @@ async function init() {
     apiKeyInput.value = '';
     renderSymbolTags();
     populateBadgeSelect();
+    setTransportMode('idle');
     setStatus('idle', 'Enter your API key to start');
   } else {
-    startAutoRefresh();
-    await fetchAllPrices();
+    restartTransport();
   }
 }
 
