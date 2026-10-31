@@ -26,6 +26,8 @@ It brings **instant, low-latency market data** directly into your browser — cl
 - 🟡 **XAUUSD (Gold)** tracking  
 - 🟠 **BTCUSD (Bitcoin)** tracking  
 - ⚡ **Ultra-low latency updates**  
+- 📊 **24h stats** per symbol: change % (green/red) plus 24h high/low, via `GET /api/v1/price/24hr` (refreshed every 60s; hidden if your plan doesn't include it)  
+- 🧭 **Trend chips** per timeframe (e.g. M15 / H1 / H4 / D1), via `GET /api/v1/multi-timeframe` (refreshed every 5 min; PRO plan and above)  
 - 🧠 **Minimal UI, zero distraction**  
 - 🔌 Built on top of **RealMarketAPI infrastructure**
 

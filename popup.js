@@ -74,6 +74,30 @@ let wsLastMessageAt = 0;
 let fallbackPolling = false;
 let metricsPersistTimer = null;
 
+// --- Insights state (24h stats + multi-timeframe trend) ----------------------
+// Slow-refresh data, fetched independently of the price stream so it never
+// runs per WebSocket tick and never blocks prices when it fails.
+const API_BASE = 'https://api.realmarketapi.com/api/v1';
+const STATS_24H_REFRESH_MS = 60 * 1000;
+const TREND_REFRESH_MS     = 5 * 60 * 1000;
+const TREND_TF_ORDER       = ['M1', 'M5', 'M15', 'H1', 'H4', 'D1'];
+const TREND_STYLES = {
+  StrongBullish: { cls: 'strong-bull', arrow: '▲', label: 'Strong bullish' },
+  Bullish:       { cls: 'bull',        arrow: '△', label: 'Bullish' },
+  Neutral:       { cls: 'neutral',     arrow: '–', label: 'Neutral' },
+  Bearish:       { cls: 'bear',        arrow: '▽', label: 'Bearish' },
+  StrongBearish: { cls: 'strong-bear', arrow: '▼', label: 'Strong bearish' },
+};
+let insightsApiKey     = '';     // key the cached insights belong to
+let stats24hMap        = {};     // symbolCode -> /price/24hr row
+let stats24hTimer      = null;
+let stats24hController = null;
+let stats24hDenied     = false;  // plan/key rejected: stop retrying until key changes
+let trendTimer         = null;
+let trendDenied        = false;
+const trendCache       = new Map(); // symbolCode -> { timeframes, calculatedAt }
+const trendControllers = new Map(); // symbolCode -> AbortController
+
 const transportMetrics = {
   mode: 'idle',
   wsOpens: 0,
@@ -176,6 +200,17 @@ function buildGrid() {
       </div>
       <div class="price-val" id="price-${code}"><div class="skeleton"></div></div>
       <div class="price-label">${meta.label}</div>
+      <div class="stats24h hidden" id="s24-${code}">
+        <div class="s24-left">
+          <span class="s24-lbl">24h</span>
+          <span class="chg24" id="chg24-${code}">—</span>
+        </div>
+        <div class="s24-hl">
+          <span><span class="s24-lbl">H</span> <span class="s24-val" id="hi24-${code}">—</span></span>
+          <span><span class="s24-lbl">L</span> <span class="s24-val" id="lo24-${code}">—</span></span>
+        </div>
+      </div>
+      <div class="trend-chips hidden" id="trend-${code}"></div>
       <div class="ohlcv" id="ohlcv-${code}">
         <div class="ohlcv-row"><span class="ohlcv-lbl">Bid</span><span class="ohlcv-val" id="bid-${code}">—</span></div>
         <div class="ohlcv-row"><span class="ohlcv-lbl">Ask</span><span class="ohlcv-val" id="ask-${code}">—</span></div>
@@ -187,6 +222,8 @@ function buildGrid() {
     `;
     priceGrid.appendChild(card);
   });
+  // Cards were recreated: repaint any insights we already have cached.
+  renderAllInsights();
 }
 
 // --- Render symbol tags in settings ------------------------------------------
@@ -516,6 +553,216 @@ function resetCountdown() {
   }, 1000);
 }
 
+// --- Insights: shared GET helper ---------------------------------------------
+async function apiGet(path, params, signal) {
+  const query = Object.entries({ apiKey: settings.apiKey, ...params })
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join('&');
+  const res = await fetch(`${API_BASE}${path}?${query}`, { signal });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = new Error(body.message || `HTTP ${res.status}`);
+    err.status = res.status;
+    err.errorCodes = Array.isArray(body.errors)
+      ? body.errors.map(e => e?.errorCode).filter(Boolean)
+      : [];
+    throw err;
+  }
+  return res.json();
+}
+
+// Plan / key rejections won't fix themselves on retry (unlike quota or network).
+function isAccessDenied(err) {
+  if (err?.status === 401 || err?.status === 403) return true;
+  return (err?.errorCodes || []).some(c =>
+    /INVALID_PLAN|INVALID_API_KEY|EMAIL_NOT_VERIFIED/.test(String(c)));
+}
+
+// --- Insights: 24h stats ------------------------------------------------------
+function render24hStats(code) {
+  const row = document.getElementById(`s24-${code}`);
+  if (!row) return;
+
+  const stats = stats24hMap[code];
+  const pct = stats ? parseFloat(stats.changePercent24h) : NaN;
+  if (!stats || isNaN(pct)) {
+    row.classList.add('hidden');
+    return;
+  }
+
+  const chg = document.getElementById(`chg24-${code}`);
+  if (chg) {
+    chg.textContent = `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`;
+    chg.classList.toggle('up', pct > 0);
+    chg.classList.toggle('down', pct < 0);
+  }
+  const hi = document.getElementById(`hi24-${code}`);
+  const lo = document.getElementById(`lo24-${code}`);
+  if (hi) hi.textContent = formatPrice(stats.highPrice24h, code);
+  if (lo) lo.textContent = formatPrice(stats.lowPrice24h, code);
+  row.classList.remove('hidden');
+}
+
+// One call returns every symbol in the key's plan; map it by symbolCode.
+async function fetch24hStats() {
+  if (!settings.apiKey || stats24hDenied) return;
+
+  if (stats24hController) stats24hController.abort();
+  const controller = new AbortController();
+  stats24hController = controller;
+  const { signal } = controller;
+
+  try {
+    const body = await apiGet('/price/24hr', {}, signal);
+    if (signal.aborted) return;
+    const next = {};
+    (Array.isArray(body?.data) ? body.data : []).forEach(item => {
+      if (item?.symbolCode) next[String(item.symbolCode).toUpperCase()] = item;
+    });
+    stats24hMap = next;
+  } catch (err) {
+    if (err?.name === 'AbortError' || signal.aborted) return;
+    if (isAccessDenied(err)) stats24hDenied = true;
+    stats24hMap = {}; // hide the row silently; prices are unaffected
+    console.debug('[RealMarketAPI] 24h stats unavailable:', err?.message || err);
+  } finally {
+    if (stats24hController === controller) stats24hController = null;
+  }
+
+  settings.symbols.forEach(render24hStats);
+}
+
+// --- Insights: multi-timeframe trend -----------------------------------------
+function renderTrendChips(code) {
+  const wrap = document.getElementById(`trend-${code}`);
+  if (!wrap) return;
+  wrap.textContent = '';
+
+  const timeframes = trendCache.get(code)?.timeframes;
+  if (!timeframes || typeof timeframes !== 'object') {
+    wrap.classList.add('hidden');
+    return;
+  }
+
+  const rank = tf => {
+    const i = TREND_TF_ORDER.indexOf(tf);
+    return i === -1 ? TREND_TF_ORDER.length : i;
+  };
+  const ordered = Object.keys(timeframes).sort((a, b) => rank(a) - rank(b));
+
+  let shown = 0;
+  ordered.forEach(tf => {
+    const style = TREND_STYLES[timeframes[tf]];
+    if (!style) return; // unknown value: skip rather than guess
+    const chip = document.createElement('span');
+    chip.className = `trend-chip ${style.cls}`;
+    chip.title = `${tf}: ${style.label}`;
+    chip.textContent = `${tf} ${style.arrow}`;
+    wrap.appendChild(chip);
+    shown++;
+  });
+  wrap.classList.toggle('hidden', shown === 0);
+}
+
+async function fetchTrendForSymbol(code) {
+  if (!settings.apiKey || trendDenied || !settings.symbols.includes(code)) return;
+
+  const prev = trendControllers.get(code);
+  if (prev) prev.abort();
+  const controller = new AbortController();
+  trendControllers.set(code, controller);
+  const { signal } = controller;
+
+  try {
+    const body = await apiGet('/multi-timeframe', { symbolCode: code }, signal);
+    if (signal.aborted) return;
+    trendCache.set(code, { timeframes: body?.timeframes, calculatedAt: body?.calculatedAt });
+  } catch (err) {
+    if (err?.name === 'AbortError' || signal.aborted) return;
+    if (isAccessDenied(err)) {
+      // Plan-level rejection (multi-timeframe needs PRO+): hide chips everywhere.
+      trendDenied = true;
+      trendCache.clear();
+      settings.symbols.forEach(renderTrendChips);
+    } else {
+      // Remember the miss so add/remove doesn't refetch it; the slow timer retries.
+      trendCache.set(code, { timeframes: null, calculatedAt: null });
+    }
+    console.debug(`[RealMarketAPI] trend unavailable for ${code}:`, err?.message || err);
+  } finally {
+    if (trendControllers.get(code) === controller) trendControllers.delete(code);
+  }
+
+  renderTrendChips(code);
+}
+
+function refreshAllTrends() {
+  settings.symbols.forEach(code => fetchTrendForSymbol(code));
+}
+
+// --- Insights: lifecycle ------------------------------------------------------
+function renderAllInsights() {
+  settings.symbols.forEach(code => {
+    render24hStats(code);
+    renderTrendChips(code);
+  });
+}
+
+function stopInsights() {
+  if (stats24hTimer) clearInterval(stats24hTimer);
+  if (trendTimer) clearInterval(trendTimer);
+  stats24hTimer = null;
+  trendTimer = null;
+
+  if (stats24hController) stats24hController.abort();
+  stats24hController = null;
+  trendControllers.forEach(controller => controller.abort());
+  trendControllers.clear();
+}
+
+function resetInsights() {
+  stopInsights();
+  insightsApiKey = '';
+  stats24hMap = {};
+  stats24hDenied = false;
+  trendDenied = false;
+  trendCache.clear();
+  renderAllInsights();
+}
+
+function startInsights() {
+  if (!settings.apiKey) {
+    resetInsights();
+    return;
+  }
+
+  // New key: cached data and plan rejections belong to the old key.
+  if (settings.apiKey !== insightsApiKey) {
+    resetInsights();
+    insightsApiKey = settings.apiKey;
+  }
+
+  // Drop in-flight requests and cache for symbols that were removed.
+  trendControllers.forEach((controller, code) => {
+    if (!settings.symbols.includes(code)) {
+      controller.abort();
+      trendControllers.delete(code);
+    }
+  });
+  Array.from(trendCache.keys()).forEach(code => {
+    if (!settings.symbols.includes(code)) trendCache.delete(code);
+  });
+
+  // Only fetch what's missing; the slow timers handle routine refreshes.
+  if (!Object.keys(stats24hMap).length && !stats24hController) fetch24hStats();
+  settings.symbols.forEach(code => {
+    if (!trendCache.has(code) && !trendControllers.has(code)) fetchTrendForSymbol(code);
+  });
+
+  if (!stats24hTimer) stats24hTimer = setInterval(fetch24hStats, STATS_24H_REFRESH_MS);
+  if (!trendTimer) trendTimer = setInterval(refreshAllTrends, TREND_REFRESH_MS);
+}
+
 // --- Polling fallback ---------------------------------------------------------
 function stopPollingFallback() {
   if (refreshTimer) clearInterval(refreshTimer);
@@ -657,12 +904,14 @@ function restartTransport() {
   if (!settings.apiKey) {
     stopWebSocketMode();
     stopPollingFallback();
+    resetInsights();
     return;
   }
 
   // Fast snapshot first, then stream updates.
   fetchAllPrices();
   startWebSocketMode();
+  startInsights();
 }
 
 // --- Storage ------------------------------------------------------------------

@@ -273,6 +273,40 @@
       line-height: 1; margin-bottom: 4px; min-height: 20px;
     }
     .price-label { font-size: 10px; color: #475569; margin-bottom: 6px; }
+    /* 24h stats */
+    .stats24h {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 6px; margin-bottom: 6px;
+    }
+    .s24-left { display: flex; align-items: center; gap: 4px; }
+    .s24-lbl {
+      font-size: 8.5px; color: #475569; font-weight: 600;
+      letter-spacing: 0.3px; text-transform: uppercase;
+    }
+    .chg24 {
+      font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums;
+      padding: 1px 5px; border-radius: 4px;
+      color: #94a3b8; background: #33415566;
+    }
+    .chg24.up   { color: #22c55e; background: #22c55e1f; }
+    .chg24.down { color: #ef4444; background: #ef44441f; }
+    .s24-hl {
+      display: flex; flex-direction: column; align-items: flex-end;
+      font-size: 9px; line-height: 1.35; white-space: nowrap;
+    }
+    .s24-val { color: #94a3b8; font-variant-numeric: tabular-nums; }
+    /* Multi-timeframe trend chips */
+    .trend-chips { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 4px; }
+    .trend-chip {
+      font-size: 8.5px; font-weight: 600; line-height: 1.3;
+      padding: 1px 4px; border-radius: 4px; letter-spacing: 0.3px;
+      border: 1px solid #334155; color: #64748b; cursor: default;
+      white-space: nowrap;
+    }
+    .trend-chip.bull        { color: #22c55e; border-color: #22c55e55; }
+    .trend-chip.bear        { color: #ef4444; border-color: #ef444455; }
+    .trend-chip.strong-bull { color: #052e16; background: #22c55e; border-color: #22c55e; font-weight: 800; }
+    .trend-chip.strong-bear { color: #450a0a; background: #ef4444; border-color: #ef4444; font-weight: 800; }
     .ohlcv {
       display: grid; grid-template-columns: 1fr 1fr;
       gap: 2px 6px; margin-top: 5px;
